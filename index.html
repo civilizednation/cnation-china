@@ -111,27 +111,43 @@
         const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         const tableName = 'cnation_translation_history';
 
+        // ★ 기기의 음성(Voice) 목록을 미리 로드해두는 로직 (브라우저 버그 방지)
+        let availableVoices = [];
+        function loadVoices() {
+            availableVoices = window.speechSynthesis.getVoices();
+        }
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+            loadVoices(); // 즉시 로드 시도
+        }
+
         // ==========================================
-        // ★ 0. 중국어 음성 읽기 (TTS) 기능
+        // ★ 0. 중국어 음성 읽기 (TTS) 기능 (강제 매칭 로직 추가)
         // ==========================================
         function cnation_speakChinese() {
-            // 화면에 떠 있는 글씨를 가져옵니다.
             const text = document.getElementById('cnation-chineseOutput').innerText;
-
-            // 안내 멘트일 경우에는 읽지 않고 무시합니다.
             if (text.includes('한국어를 입력하고')) return;
 
-            // 스마트폰/브라우저가 음성 기능을 지원하는지 확인
             if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel(); // 혹시 전에 읽고 있던 말이 있으면 끊기
+                window.speechSynthesis.cancel();
 
                 const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'zh-CN'; // 중국어(간체) 발음으로 세팅
-                utterance.rate = 0.9;     // 현지인들이 잘 알아듣도록 말하는 속도를 살짝 늦춤 (0.1 ~ 1.0)
+                utterance.lang = 'zh-CN';
+                utterance.rate = 0.85; // 조금 더 천천히 또박또박 읽게 설정
+
+                // ★ 핵심 수정: 외계어가 나오지 않도록 기기 내에 있는 '중국어' 전용 성우를 찾아 강제로 세팅합니다.
+                const voices = window.speechSynthesis.getVoices();
+                const zhVoice = voices.find(voice => voice.lang.includes('zh') || voice.name.toLowerCase().includes('chinese'));
+
+                if (zhVoice) {
+                    utterance.voice = zhVoice;
+                } else {
+                    console.warn("전용 중국어 음성팩을 찾을 수 없어 기본 엔진으로 시도합니다.");
+                }
 
                 window.speechSynthesis.speak(utterance);
             } else {
-                alert('현재 사용 중인 스마트폰이나 브라우저에서는 음성 읽기 기능을 지원하지 않습니다.');
+                alert('현재 사용 중인 기기에서는 음성 읽기 기능을 지원하지 않습니다.');
             }
         }
 
@@ -174,7 +190,6 @@
                 outputEl.innerHTML = translatedText;
                 outputEl.classList.remove('text-gray-300', 'text-base', 'font-normal');
 
-                // ★ 번역 완료 시 재생 버튼 짠! 하고 나타나게 하기
                 document.getElementById('cnation-playBtn').classList.remove('hidden');
 
                 // 번역 기록 DB 저장
@@ -195,16 +210,13 @@
             const outputEl = document.getElementById('cnation-chineseOutput');
             outputEl.innerHTML = '<span class="text-gray-300 text-base font-normal">한국어를 입력하고<br>변환 버튼을 누르세요.</span>';
 
-            // ★ 화면 지울 때는 재생 버튼도 같이 숨기기
             document.getElementById('cnation-playBtn').classList.add('hidden');
-
             document.getElementById('cnation-koreanInput').focus();
         }
 
         // ==========================================
         // 2. 과거 대화 (히스토리) 로직
         // ==========================================
-
         function cnation_openHistory() {
             document.getElementById('cnation-historyModal').classList.remove('hidden');
             document.getElementById('cnation-historyModal').classList.add('flex');
@@ -222,9 +234,7 @@
             outputEl.innerHTML = chi;
             outputEl.classList.remove('text-gray-300', 'text-base', 'font-normal');
 
-            // ★ 과거 기록을 불러왔을 때도 바로 읽을 수 있게 재생 버튼 노출!
             document.getElementById('cnation-playBtn').classList.remove('hidden');
-
             cnation_closeHistory();
         }
 
