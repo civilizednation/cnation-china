@@ -111,18 +111,18 @@
         const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         const tableName = 'cnation_translation_history';
 
-        // ★ 기기의 음성(Voice) 목록을 미리 로드해두는 로직 (브라우저 버그 방지)
+        // ★ 기기의 음성(Voice) 목록을 미리 로드해두는 로직
         let availableVoices = [];
         function loadVoices() {
             availableVoices = window.speechSynthesis.getVoices();
         }
         if ('speechSynthesis' in window) {
             window.speechSynthesis.onvoiceschanged = loadVoices;
-            loadVoices(); // 즉시 로드 시도
+            loadVoices();
         }
 
         // ==========================================
-        // ★ 0. 중국어 음성 읽기 (TTS) 기능 (강제 매칭 로직 추가)
+        // ★ 0. 중국어 음성 읽기 (TTS) 기능 
         // ==========================================
         function cnation_speakChinese() {
             const text = document.getElementById('cnation-chineseOutput').innerText;
@@ -133,9 +133,10 @@
 
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'zh-CN';
-                utterance.rate = 0.85; // 조금 더 천천히 또박또박 읽게 설정
 
-                // ★ 핵심 수정: 외계어가 나오지 않도록 기기 내에 있는 '중국어' 전용 성우를 찾아 강제로 세팅합니다.
+                // ★ 핵심 수정: 기존 0.85에서 0.7로 속도를 확 늦춰서 또박또박 명확하게 읽도록 수정했습니다!
+                utterance.rate = 0.7;
+
                 const voices = window.speechSynthesis.getVoices();
                 const zhVoice = voices.find(voice => voice.lang.includes('zh') || voice.name.toLowerCase().includes('chinese'));
 
