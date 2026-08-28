@@ -8,6 +8,7 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- supabase-js는 기존 Supabase 기록을 GitHub로 1회 이전하기 위해서만 남겨둠. 이전 완료 후에는 삭제해도 됨 -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <style>
@@ -31,7 +32,13 @@
 
     <div class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center z-10 shrink-0">
         <h1 class="text-lg font-bold"><i class="fas fa-bolt mr-2 text-yellow-300"></i>즉석 소통 번역기</h1>
-        <span class="text-xs bg-blue-800 px-2 py-1 rounded-full font-bold">DeepSeek 엔진</span>
+        <div class="flex items-center gap-2">
+            <span class="text-xs bg-blue-800 px-2 py-1 rounded-full font-bold">DeepSeek 엔진</span>
+            <button onclick="cnation_setGithubToken()" class="text-white/70 hover:text-white text-base px-1"
+                title="GitHub 저장소 연결 설정">
+                <i class="fas fa-cog"></i>
+            </button>
+        </div>
     </div>
 
     <div class="flex-1 bg-white p-6 flex flex-col items-center justify-center relative overflow-y-auto">
@@ -102,14 +109,140 @@
     </div>
 
     <script>
-        // 🔑 API 키 및 Supabase 기본 설정
+        // 🔑 API 키 및 데이터 저장소(GitHub) 설정
         const cnation_API_KEY = "sk-a11a347ec137483ab0f6b0fefb8bf392";
 
+        // 번역 기록을 저장할 GitHub 저장소 위치 (이 앱과 동일한 저장소/폴더)
+        const GITHUB_OWNER = 'civilizednation';
+        const GITHUB_REPO = 'cnation-china';
+        const GITHUB_BRANCH = 'main';
+        const GITHUB_DATA_PATH = 'data/history.json';
+
+        // ↓↓↓ 기존 Supabase 기록을 GitHub로 1회 이전하기 위한 설정 (이전 완료 후 이 블록과 위 supabase-js 스크립트는 삭제해도 됨)
         const SUPABASE_URL = 'https://nydnthkqvpajufbycxjq.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_LWqTdLhSkspLke1HvFsmVA_KOYnGGaY';
         const { createClient } = supabase;
         const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         const tableName = 'cnation_translation_history';
+        // ↑↑↑
+
+        // ==========================================
+        // ★ GitHub 저장소를 데이터베이스로 사용하기 위한 유틸
+        // ==========================================
+        function cnation_utf8ToBase64(str) {
+            const bytes = new TextEncoder().encode(str);
+            let binary = '';
+            bytes.forEach(b => binary += String.fromCharCode(b));
+            return btoa(binary);
+        }
+
+        function cnation_base64ToUtf8(b64) {
+            const binary = atob(b64.replace(/\n/g, ''));
+            const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+            return new TextDecoder().decode(bytes);
+        }
+
+        function cnation_getGithubToken() {
+            let token = localStorage.getItem('cnation_gh_token');
+            if (!token) {
+                token = prompt(
+                    '번역 기록을 저장하려면 GitHub Personal Access Token이 필요합니다.\n\n' +
+                    'GitHub > Settings > Developer settings > Fine-grained tokens 에서\n' +
+                    `이 저장소(${GITHUB_REPO})에 한정해 "Contents: Read and write" 권한으로 발급 후 붙여넣으세요.`
+                );
+                if (token && token.trim()) {
+                    token = token.trim();
+                    localStorage.setItem('cnation_gh_token', token);
+                } else {
+                    token = null;
+                }
+            }
+            return token;
+        }
+
+        function cnation_setGithubToken() {
+            const current = localStorage.getItem('cnation_gh_token') || '';
+            const token = prompt('GitHub Personal Access Token 입력\n(비워두고 확인을 누르면 저장된 토큰이 삭제됩니다)', current);
+            if (token === null) return;
+            if (token.trim() === '') {
+                localStorage.removeItem('cnation_gh_token');
+                alert('토큰이 삭제되었습니다.');
+            } else {
+                localStorage.setItem('cnation_gh_token', token.trim());
+                alert('토큰이 저장되었습니다.');
+            }
+        }
+
+        async function cnation_ghRequest(method, body) {
+            const token = cnation_getGithubToken();
+            if (!token) throw new Error('GitHub 토큰이 설정되지 않았습니다.');
+
+            const base = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_DATA_PATH}`;
+            const url = method === 'GET' ? `${base}?ref=${GITHUB_BRANCH}` : base;
+
+            return fetch(url, {
+                method,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/vnd.github+json',
+                    'Content-Type': 'application/json'
+                },
+                body: body ? JSON.stringify(body) : undefined
+            });
+        }
+
+        // 기존 Supabase 기록이 남아있으면 읽어와 GitHub로 이전 (이전할 게 없거나 실패하면 빈 배열)
+        async function cnation_migrateFromSupabase() {
+            try {
+                const { data, error } = await _supabase
+                    .from(tableName)
+                    .select('*')
+                    .order('created_at', { ascending: true })
+                    .limit(1000);
+                if (error || !data || data.length === 0) return [];
+                console.log(`Supabase에서 ${data.length}건의 기존 기록을 발견하여 GitHub로 이전합니다.`);
+                return data.map(({ korean_text, chinese_text, created_at }) => ({ korean_text, chinese_text, created_at }));
+            } catch (e) {
+                console.warn('Supabase 이전 건너뜀:', e.message);
+                return [];
+            }
+        }
+
+        async function cnation_ghGetHistory() {
+            const res = await cnation_ghRequest('GET');
+
+            if (res.status === 404) {
+                const migrated = await cnation_migrateFromSupabase();
+                if (migrated.length > 0) {
+                    const sha = await cnation_ghSaveHistory(migrated, null, '기존 Supabase 번역 기록 이전');
+                    return { sha, records: migrated };
+                }
+                return { sha: null, records: [] };
+            }
+
+            if (!res.ok) throw new Error(`GitHub 조회 실패 (${res.status})`);
+
+            const json = await res.json();
+            const records = JSON.parse(cnation_base64ToUtf8(json.content));
+            return { sha: json.sha, records };
+        }
+
+        async function cnation_ghSaveHistory(records, sha, message) {
+            const res = await cnation_ghRequest('PUT', {
+                message,
+                content: cnation_utf8ToBase64(JSON.stringify(records, null, 2)),
+                branch: GITHUB_BRANCH,
+                ...(sha ? { sha } : {})
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.message || `GitHub 저장 실패 (${res.status})`);
+            }
+
+            const json = await res.json();
+            return json.content.sha;
+        }
 
         // ★ 기기의 음성(Voice) 목록을 미리 로드해두는 로직
         let availableVoices = [];
@@ -193,11 +326,18 @@
 
                 document.getElementById('cnation-playBtn').classList.remove('hidden');
 
-                // 번역 기록 DB 저장
-                await _supabase.from(tableName).insert([{
-                    korean_text: input,
-                    chinese_text: translatedText
-                }]);
+                // 번역 기록 저장 (GitHub 저장소의 data/history.json)
+                try {
+                    const { sha, records } = await cnation_ghGetHistory();
+                    records.push({
+                        korean_text: input,
+                        chinese_text: translatedText,
+                        created_at: new Date().toISOString()
+                    });
+                    await cnation_ghSaveHistory(records, sha, `번역 기록 추가: ${input.slice(0, 30)}`);
+                } catch (saveError) {
+                    console.warn('번역 기록 저장 실패:', saveError.message);
+                }
 
             } catch (error) {
                 alert('번역 실패! 원인:\n' + error.message);
@@ -246,17 +386,16 @@
             listDiv.innerHTML = '<p class="text-center text-gray-400 py-10"><i class="fas fa-spinner fa-spin mr-2"></i>기록을 불러오는 중...</p>';
 
             try {
-                let query = _supabase.from(tableName).select('*').order('created_at', { ascending: false });
+                const { records } = await cnation_ghGetHistory();
+                let data = [...records].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
                 if (!loadAll) {
-                    query = query.limit(10);
+                    data = data.slice(0, 10);
                     loadAllBtn.classList.remove('hidden');
                 } else {
-                    query = query.limit(500);
+                    data = data.slice(0, 500);
                     loadAllBtn.classList.add('hidden');
                 }
-
-                const { data, error } = await query;
-                if (error) throw error;
 
                 if (!data || data.length === 0) {
                     listDiv.innerHTML = '<p class="text-center text-gray-400 py-10">과거 대화 기록이 없습니다.</p>';
@@ -300,12 +439,8 @@
 
             if (isConfirm) {
                 try {
-                    const { error } = await _supabase
-                        .from(tableName)
-                        .delete()
-                        .neq('id', 0);
-
-                    if (error) throw error;
+                    const { sha } = await cnation_ghGetHistory();
+                    await cnation_ghSaveHistory([], sha, '전체 번역 기록 삭제');
 
                     alert("모든 기록이 깔끔하게 삭제되었습니다! 🗑️");
                     cnation_loadHistory(false);
